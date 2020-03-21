@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package pb;
+
+service Alcatraz {
+    rpc UploadFile(stream UploadRequest) returns (UploadResponse) {}
+}
+
+message UploadRequest {
+    oneof test_oneof {
+        bytes chunk = 1;
+        Metadata metadata = 2;
+    }
+}
+
+message Metadata {
+    string name = 1;
+    uint64 size = 2;
+}
+
+message UploadResponse {
+    bool success = 1;
+    string message = 2;
+}

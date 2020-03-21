@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +34,11 @@ func (c *Client) Run(ctx context.Context) error {
 		return fmt.Errorf("folder %q does not exist", c.folder)
 	}
 
+	// we will work only with files inside the folder, so change working dir
+	if err := os.Chdir(c.folder); err != nil {
+		return fmt.Errorf("failed to change working directory: %v", err)
+	}
+
 	// open connection to the server
 	conn, err := grpc.Dial(c.host, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
@@ -45,9 +49,9 @@ func (c *Client) Run(ctx context.Context) error {
 	c.cli = pb.NewAlcatrazClient(conn)
 	log.Infof("Opened connection with %s", c.host)
 
-	upload := make(chan string, 100)
-	uploaded := make(chan string, 100)
-	failed := make(chan string, 100)
+	upload := make(chan string, 50)
+	uploaded := make(chan string, 50)
+	failed := make(chan string, 50)
 
 	wg := sync.WaitGroup{}
 	wg.Add(2)
@@ -76,19 +80,17 @@ func (c *Client) monitor(ctx context.Context, upload chan<- string, uploaded, fa
 		case <-ctx.Done():
 			return
 		case file := <-uploaded:
-			if err := os.Remove(filepath.Join(c.folder, file)); err != nil {
+			if err := c.removeFile(file); err != nil {
 				log.Errorf("Failed to delete file %q. Error: %v", file, err)
 			}
 			delete(uploadingFiles, file)
 		case file := <-failed:
 			delete(uploadingFiles, file)
 		case <-timer.C:
-			err := filepath.Walk(c.folder, func(filepath string, fileinfo os.FileInfo, err error) error {
+			err := filepath.Walk(".", func(filepath string, fileinfo os.FileInfo, err error) error {
 				if fileinfo.IsDir() {
 					return nil
 				}
-
-				filepath = strings.TrimPrefix(filepath, c.folder)
 
 				if _, ok := uploadingFiles[filepath]; !ok {
 					upload <- filepath
@@ -129,7 +131,7 @@ func (c *Client) upload(ctx context.Context, upload <-chan string, uploaded, fai
 }
 
 func (c *Client) uploadFile(ctx context.Context, filename string) error {
-	file, err := os.Open(filepath.Join(c.folder, filename))
+	file, err := os.Open(filename)
 	if err != nil {
 		return fmt.Errorf("failed to open the file: %v", err)
 	}
@@ -183,6 +185,20 @@ func (c *Client) uploadFile(ctx context.Context, filename string) error {
 	// close the stream
 	if _, err := stream.CloseAndRecv(); err != nil {
 		return fmt.Errorf("failed to close the stream: %v", err)
+	}
+
+	return nil
+}
+
+func (c *Client) removeFile(filename string) error {
+	if err := os.Remove(filename); err != nil {
+		return err
+	}
+
+	if dir := filepath.Dir(filename); dir != "" {
+		if err := os.Remove(dir); err == nil {
+			err = nil
+		}
 	}
 
 	return nil

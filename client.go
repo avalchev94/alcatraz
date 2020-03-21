@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/avalchev94/alcatraz/pb"
+	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
 
@@ -40,19 +41,22 @@ func (c *Client) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to dial server on host %q: %v", c.host, err)
 	}
 	defer conn.Close()
+
 	c.cli = pb.NewAlcatrazClient(conn)
+	log.Infof("Opened connection with %s", c.host)
 
 	upload := make(chan string, 100)
 	uploaded := make(chan string, 100)
+	failed := make(chan string, 100)
 
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 	go func() {
-		c.monitor(ctx, upload, uploaded)
+		c.monitor(ctx, upload, uploaded, failed)
 		wg.Add(1)
 	}()
 	go func() {
-		c.upload(ctx, upload, uploaded)
+		c.upload(ctx, upload, uploaded, failed)
 		wg.Add(1)
 	}()
 
@@ -63,7 +67,7 @@ func (c *Client) Run(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) monitor(ctx context.Context, upload chan<- string, uploaded <-chan string) {
+func (c *Client) monitor(ctx context.Context, upload chan<- string, uploaded, failed <-chan string) {
 	uploadingFiles := map[string]struct{}{}
 
 	timer := time.NewTimer(1)
@@ -72,24 +76,28 @@ func (c *Client) monitor(ctx context.Context, upload chan<- string, uploaded <-c
 		case <-ctx.Done():
 			return
 		case file := <-uploaded:
-			if err := os.Remove(file); err != nil {
-				log.Printf("failed to delete file: %v", err)
+			if err := os.Remove(filepath.Join(c.folder, file)); err != nil {
+				log.Errorf("Failed to delete file %q. Error: %v", file, err)
 			}
 			delete(uploadingFiles, file)
+		case file := <-failed:
+			delete(uploadingFiles, file)
 		case <-timer.C:
-			err := filepath.Walk(c.folder, func(path string, _ os.FileInfo, err error) error {
-				if path == c.folder {
+			err := filepath.Walk(c.folder, func(filepath string, fileinfo os.FileInfo, err error) error {
+				if fileinfo.IsDir() {
 					return nil
 				}
 
-				if _, ok := uploadingFiles[path]; !ok {
-					upload <- path
-					uploadingFiles[path] = struct{}{}
+				filepath = strings.TrimPrefix(filepath, c.folder)
+
+				if _, ok := uploadingFiles[filepath]; !ok {
+					upload <- filepath
+					uploadingFiles[filepath] = struct{}{}
 				}
 				return err
 			})
 			if err != nil {
-				log.Fatal(err)
+				log.Errorf("Failed to monitor folder: %v", err)
 			}
 
 			timer.Reset(5 * time.Second)
@@ -97,25 +105,31 @@ func (c *Client) monitor(ctx context.Context, upload chan<- string, uploaded <-c
 	}
 }
 
-func (c *Client) upload(ctx context.Context, upload <-chan string, uploaded chan<- string) {
+func (c *Client) upload(ctx context.Context, upload <-chan string, uploaded, failed chan<- string) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case file := <-upload:
 			go func() {
+				ctx, cancel := context.WithCancel(ctx)
+				defer cancel()
+
+				log.Debugf("Uploading %q...", file)
 				if err := c.uploadFile(ctx, file); err != nil {
-					log.Printf("Failed to upload file %q. Error: %v", file, err)
+					failed <- file
+					log.Errorf("Failed to upload %q. Error: %v", file, err)
 				} else {
 					uploaded <- file
+					log.Debugf("File %q was uploaded.", file)
 				}
 			}()
 		}
 	}
 }
 
-func (c *Client) uploadFile(ctx context.Context, filepath string) error {
-	file, err := os.Open(filepath)
+func (c *Client) uploadFile(ctx context.Context, filename string) error {
+	file, err := os.Open(filepath.Join(c.folder, filename))
 	if err != nil {
 		return fmt.Errorf("failed to open the file: %v", err)
 	}
@@ -136,7 +150,7 @@ func (c *Client) uploadFile(ctx context.Context, filepath string) error {
 	err = stream.Send(&pb.UploadRequest{
 		TestOneof: &pb.UploadRequest_Metadata{
 			Metadata: &pb.Metadata{
-				Name: fileinfo.Name(),
+				Name: filename,
 				Size: fileinfo.Size(),
 				// hash
 			},
@@ -162,7 +176,7 @@ func (c *Client) uploadFile(ctx context.Context, filepath string) error {
 			},
 		})
 		if err != nil {
-			return fmt.Errorf("failed to send read chunck: %v", err)
+			return fmt.Errorf("failed to send chunck: %v", err)
 		}
 	}
 

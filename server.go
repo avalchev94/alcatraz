@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
 
 	"github.com/avalchev94/alcatraz/pb"
 	"github.com/golang/protobuf/ptypes/empty"
+	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 )
@@ -30,7 +30,9 @@ func NewServer(port int, storage string) *Server {
 
 func (s *Server) Run(ctx context.Context) error {
 	if _, err := os.Stat(s.storage); os.IsNotExist(err) {
-		os.MkdirAll(s.storage, os.ModePerm)
+		if err := os.MkdirAll(s.storage, os.ModePerm); err != nil {
+			return fmt.Errorf("failed to create storage folder %q: %v", s.storage, err)
+		}
 	}
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", s.port))
@@ -40,9 +42,19 @@ func (s *Server) Run(ctx context.Context) error {
 
 	server := grpc.NewServer()
 	pb.RegisterAlcatrazServer(server, s)
-	if err := server.Serve(lis); err != nil {
-		return fmt.Errorf("failed to serve: %v", err)
-	}
+
+	log.Infof("Server listening on port %d...", s.port)
+	go func() {
+		if err := server.Serve(lis); err != nil {
+			log.Fatalf("Failed to run server: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
+
+	log.Info("Gracefully stoping server...")
+	server.GracefulStop()
+	log.Info("Server stopped")
 
 	return nil
 }
@@ -52,12 +64,13 @@ func (s *Server) UploadFile(stream pb.Alcatraz_UploadFileServer) error {
 	if err != nil {
 		return grpc.Errorf(codes.InvalidArgument, "failed to recv metadata: %v", err)
 	}
-	log.Printf("file upload: %v", meta)
+	log.Debugf("Upload file %q...", meta.GetName())
 
 	buffer := make([]byte, 0, meta.GetSize())
 	for {
 		chunk, err := s.recvChunk(stream)
 		if err != nil {
+			log.Errorf("Failed to read chunk for file %q. Error: %v", meta.GetName(), err)
 			return grpc.Errorf(codes.InvalidArgument, "failed to recv chunck: %v", err)
 		} else if chunk == nil {
 			break
@@ -67,8 +80,10 @@ func (s *Server) UploadFile(stream pb.Alcatraz_UploadFileServer) error {
 	}
 
 	if err := s.writeFile(meta.GetName(), buffer); err != nil {
+		log.Errorf("Failed to write file %q. Error: %v", meta.GetName(), err)
 		return grpc.Errorf(codes.Internal, "failed to create the file: %v", err)
 	}
+	log.Debugf("Successfully uploaded %q", meta.GetName())
 
 	return stream.SendAndClose(&empty.Empty{})
 }
@@ -105,6 +120,15 @@ func (s *Server) recvChunk(stream pb.Alcatraz_UploadFileServer) ([]byte, error) 
 }
 
 func (s *Server) writeFile(filename string, buffer []byte) error {
-	path := filepath.Join(s.storage, filename)
-	return ioutil.WriteFile(path, buffer, os.ModePerm)
+	fullpath := filepath.Join(s.storage, filename)
+
+	if err := os.MkdirAll(filepath.Dir(fullpath), os.ModePerm); err != nil {
+		return fmt.Errorf("failed create, prior to file, directories: %v", err)
+	}
+
+	if err := ioutil.WriteFile(fullpath, buffer, os.ModePerm); err != nil {
+		return fmt.Errorf("failed to write file: %v", err)
+	}
+
+	return nil
 }

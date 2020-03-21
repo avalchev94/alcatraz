@@ -1,9 +1,11 @@
 syntax = "proto3";
 
+import "google/protobuf/empty.proto";
+
 package pb;
 
 service Alcatraz {
-    rpc UploadFile(stream UploadRequest) returns (UploadResponse) {}
+    rpc UploadFile(stream UploadRequest) returns (google.protobuf.Empty) {}
 }
 
 message UploadRequest {
@@ -15,7 +17,7 @@ message UploadRequest {
 
 message Metadata {
     string name = 1;
-    uint64 size = 2;
+    int64 size = 2;
 }
 
 message UploadResponse {

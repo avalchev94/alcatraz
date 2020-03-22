@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+package pb;
+
+service Alcatraz {
+    rpc UploadFile(stream UploadRequest) returns (google.protobuf.Empty) {}
+}
+
+message UploadRequest {
+    oneof test_oneof {
+        bytes chunk = 1;
+        string name = 2;
+        string hash = 3;
+    }
+}

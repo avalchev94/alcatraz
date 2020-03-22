@@ -20,7 +20,7 @@ func main() {
 		ca       = flag.String("ca", "", "path to the Certificate Authority certificate")
 		parallel = flag.Int("parallel", 30, "maximum number of parallely processed files")
 		interval = flag.Duration("interval", 5*time.Second, "folder monitoring interval")
-		chunk    = flag.Int("chunk", 128, "size(in bytes) of the chunk unit(files are divided to chunks when uploaded)")
+		chunk    = flag.Int("chunk", 32000, "size(in bytes) of the chunk unit(files are divided to chunks when uploaded)")
 		log      = flag.String("log", "info", "log level: info or debug")
 	)
 

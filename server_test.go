@@ -61,19 +61,49 @@ func TestUploadFile(t *testing.T) {
 		t.Errorf("expected InvalidArgument, but got %v", grpc.Code(err))
 	}
 
-	// test with good return from Recv
+	// test with good first message
+	stream.EXPECT().Recv().Times(1).Return(&pb.UploadRequest{
+		TestOneof: &pb.UploadRequest_Name{
+			Name: "file.txt",
+		},
+	}, nil)
+
+	// but bad second message
+	stream.EXPECT().Recv().Times(1).Return(nil, errors.New("bad"))
+	if err := server.UploadFile(stream); err == nil {
+		t.Errorf("expected error, but got nil")
+	} else if grpc.Code(err) != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, but got %v", grpc.Code(err))
+	}
+
+	// verify file is not present
+	if _, err := os.Stat(filepath.Join(server.StoragePath, clientName, "file.txt")); !os.IsNotExist(err) {
+		t.Errorf("file should be deleted when upload fails")
+	}
+
+	// test with good first message
+	stream.EXPECT().Recv().Times(1).Return(&pb.UploadRequest{
+		TestOneof: &pb.UploadRequest_Name{
+			Name: "file.txt",
+		},
+	}, nil)
+
+	// and good second and third
 	stream.EXPECT().Recv().Times(1).Return(&pb.UploadRequest{
 		TestOneof: &pb.UploadRequest_Chunk{
 			Chunk: []byte("this test"),
 		},
 	}, nil)
+	stream.EXPECT().Recv().Times(1).Return(&pb.UploadRequest{
+		TestOneof: &pb.UploadRequest_Chunk{
+			Chunk: []byte(" is awsome"),
+		},
+	}, nil)
 
 	// but wrong hash meta
 	stream.EXPECT().Recv().Times(1).Return(&pb.UploadRequest{
-		TestOneof: &pb.UploadRequest_Metadata{
-			Metadata: &pb.Metadata{
-				Hash: "1234",
-			},
+		TestOneof: &pb.UploadRequest_Hash{
+			Hash: "1234",
 		},
 	}, nil)
 	if err := server.UploadFile(stream); err == nil {
@@ -82,7 +112,14 @@ func TestUploadFile(t *testing.T) {
 		t.Errorf("expected DataLoss, but got %v", grpc.Code(err))
 	}
 
-	// test with good return from Recv
+	// finally, all messages good
+	stream.EXPECT().Recv().Times(1).Return(&pb.UploadRequest{
+		TestOneof: &pb.UploadRequest_Name{
+			Name: "file.txt",
+		},
+	}, nil)
+
+	// and good second and third
 	stream.EXPECT().Recv().Times(1).Return(&pb.UploadRequest{
 		TestOneof: &pb.UploadRequest_Chunk{
 			Chunk: []byte("this test"),
@@ -95,20 +132,16 @@ func TestUploadFile(t *testing.T) {
 		},
 	}, nil)
 
-	// and good hash
 	stream.EXPECT().Recv().Times(1).Return(&pb.UploadRequest{
-		TestOneof: &pb.UploadRequest_Metadata{
-			Metadata: &pb.Metadata{
-				Name: "file.txt",
-				Hash: "3d6c07b31fef053b227cdd9256e8eb7d314766bb2360ed3d3c562c57ad0ba696",
-			},
+		TestOneof: &pb.UploadRequest_Hash{
+			Hash: "3d6c07b31fef053b227cdd9256e8eb7d314766bb2360ed3d3c562c57ad0ba696",
 		},
 	}, nil)
 
 	stream.EXPECT().SendAndClose(&empty.Empty{}).Return(nil)
 
 	if err := server.UploadFile(stream); err != nil {
-		t.Errorf("expected nil error, but got %v", err)
+		t.Errorf("upload should be successful, but %v", err)
 	}
 
 	// verify file was created

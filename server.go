@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"os"
 	"path/filepath"
@@ -113,14 +112,39 @@ func (s *Server) authClient(srv interface{}, ss grpc.ServerStream, _ *grpc.Strea
 
 func (s *Server) UploadFile(stream pb.Alcatraz_UploadFileServer) error {
 	client, _ := getCommonNameFromCtx(stream.Context())
-	log.Debugf("Client [%s]: started file upload..", client)
 
-	var (
-		meta   *pb.Metadata
-		buffer = []byte{}
-		hash   = sha256.New()
-	)
+	filename, err := s.recvFilename(stream)
+	if err != nil {
+		return grpc.Errorf(codes.InvalidArgument, "failed to recieve metadata: %v", err)
+	}
+	log.Debugf("Client [%s]: started file %q upload..", client, filename)
 
+	// create all sub-directories for the file
+	fullname := filepath.Join(s.StoragePath, client, filename)
+	dir := filepath.Dir(fullname)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+			return grpc.Errorf(codes.Internal, "failed to create directories: %v", err)
+		}
+	}
+
+	file, err := os.OpenFile(fullname, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.ModePerm)
+	if err != nil {
+		return grpc.Errorf(codes.Internal, "failed to create temp file: %v", err)
+	}
+
+	// that's a little bit tricky, if success stays false, the file will be deleted
+	// if it's changed to true, file will be closed
+	success := false
+	defer func() {
+		if success {
+			file.Close()
+		} else {
+			os.Remove(file.Name())
+		}
+	}()
+
+	hash := sha256.New()
 	for {
 		msg, err := stream.Recv()
 		if err != nil {
@@ -130,8 +154,11 @@ func (s *Server) UploadFile(stream pb.Alcatraz_UploadFileServer) error {
 
 		chunk := msg.GetChunk()
 		if chunk == nil {
-			// metadata is always the last message
-			meta = msg.GetMetadata()
+			// hash is always the last message, verify it
+			if hex.EncodeToString(hash.Sum(nil)) != msg.GetHash() {
+				log.Errorf("Client [%s]: file upload failed becase hashes are not equal", client)
+				return grpc.Errorf(codes.DataLoss, "hashes are not equal")
+			}
 			break
 		}
 
@@ -140,33 +167,28 @@ func (s *Server) UploadFile(stream pb.Alcatraz_UploadFileServer) error {
 			return grpc.Errorf(codes.Internal, "failed to write to hash: %v", err)
 		}
 
-		buffer = append(buffer, chunk...)
+		if _, err := file.Write(chunk); err != nil {
+			log.Errorf("Client [%s]: file upload failed on file write with error: %v", client, err)
+			return grpc.Errorf(codes.Internal, "failed to write to hash: %v", err)
+		}
 	}
 
-	if hex.EncodeToString(hash.Sum(nil)) != meta.GetHash() {
-		log.Errorf("Client [%s]: file upload failed becase hashes are not equal", client)
-		return grpc.Errorf(codes.DataLoss, "hashes are not equal")
-	}
-
-	if err := s.writeFile(client, meta.GetName(), buffer); err != nil {
-		log.Errorf("Client [%s]: file upload failed on write file with error: %v", client, err)
-		return grpc.Errorf(codes.Internal, "failed to create the file: %v", err)
-	}
-	log.Debugf("Client [%s]: file with name %q and size %d was uploaded", client, meta.GetName(), meta.GetSize())
+	// change success to true, we want to close the file, not delete it!
+	success = true
+	log.Debugf("Client [%s]: file with name %q was uploaded", client, filename)
 
 	return stream.SendAndClose(&empty.Empty{})
 }
 
-func (s *Server) writeFile(client, filename string, buffer []byte) error {
-	fullpath := filepath.Join(s.StoragePath, client, filename)
-
-	if err := os.MkdirAll(filepath.Dir(fullpath), os.ModePerm); err != nil {
-		return fmt.Errorf("failed create, prior to file, directories: %v", err)
+func (s *Server) recvFilename(stream pb.Alcatraz_UploadFileServer) (string, error) {
+	msg, err := stream.Recv()
+	if err != nil {
+		return "", fmt.Errorf("failed to recieve msg from stream: %v", err)
 	}
 
-	if err := ioutil.WriteFile(fullpath, buffer, os.ModePerm); err != nil {
-		return fmt.Errorf("failed to write file: %v", err)
+	if msg.GetName() == "" {
+		return "", fmt.Errorf("expected filename")
 	}
 
-	return nil
+	return msg.GetName(), nil
 }

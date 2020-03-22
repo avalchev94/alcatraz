@@ -26,3 +26,9 @@ Certificates again are mandatory, however here we have to give as first argument
 If not given, or folder does not exist, client will fail.
 
 Last step is to put a file or folder with files in **upload** folder.
+
+# Test
+To run the tests, use:
+```
+    make test
+```

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,7 +126,7 @@ func (c *Client) monitor(ctx context.Context, upload chan<- string, uploaded, fa
 		case <-ctx.Done():
 			return
 		case file := <-uploaded:
-			if err := c.removeFile(file); err != nil {
+			if err := os.Remove(file); err != nil {
 				log.Errorf("Failed to delete file %q. Error: %v", file, err)
 			}
 			delete(uploadingFiles, file)
@@ -134,6 +135,9 @@ func (c *Client) monitor(ctx context.Context, upload chan<- string, uploaded, fa
 		case <-timer.C:
 			err := filepath.Walk(c.MonitorFolder, func(filepath string, fileinfo os.FileInfo, err error) error {
 				if fileinfo.IsDir() {
+					if filepath != c.MonitorFolder {
+						c.removeIfEmpty(filepath)
+					}
 					return nil
 				}
 
@@ -203,22 +207,26 @@ func (c *Client) uploadFile(ctx context.Context, filename string) error {
 }
 
 func (c *Client) streamFile(file *os.File, stream pb.Alcatraz_UploadFileClient) error {
-	var (
-		size int64
-		hash = sha256.New()
-	)
+	// always send the filename first
+	err := stream.Send(&pb.UploadRequest{
+		TestOneof: &pb.UploadRequest_Name{
+			Name: strings.TrimPrefix(file.Name(), c.MonitorFolder),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to send file's name: %v", err)
+	}
 
 	// send the file data chunk by chunk
+	hash := sha256.New()
 	for {
 		chunk := make([]byte, c.ChunkSize)
-		n, err := file.Read(chunk)
-		if err != nil {
+		if _, err := file.Read(chunk); err != nil {
 			if err == io.EOF {
 				break
 			}
 			return fmt.Errorf("failed to read chunk from file: %v", err)
 		}
-		size += int64(n)
 
 		if _, err := hash.Write(chunk); err != nil {
 			return fmt.Errorf("failed to write to hash: %v", err)
@@ -234,27 +242,28 @@ func (c *Client) streamFile(file *os.File, stream pb.Alcatraz_UploadFileClient) 
 		}
 	}
 
-	// always send the metadata last
-	err := stream.Send(&pb.UploadRequest{
-		TestOneof: &pb.UploadRequest_Metadata{
-			Metadata: &pb.Metadata{
-				Name: strings.TrimPrefix(file.Name(), c.MonitorFolder),
-				Size: size,
-				Hash: hex.EncodeToString(hash.Sum(nil)),
-			},
+	// always send the hash last
+	err = stream.Send(&pb.UploadRequest{
+		TestOneof: &pb.UploadRequest_Hash{
+			Hash: hex.EncodeToString(hash.Sum(nil)),
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to send file's metadata: %v", err)
+		return fmt.Errorf("failed to send file's hash: %v", err)
 	}
 
 	return nil
 }
 
-func (c *Client) removeFile(filename string) error {
-	if err := os.Remove(filename); err != nil {
-		return err
+func (c *Client) removeIfEmpty(dirname string) error {
+	content, err := ioutil.ReadDir(dirname)
+	if err != nil {
+		return fmt.Errorf("failed to read dir: %v", err)
 	}
 
-	return nil
+	if len(content) > 0 {
+		return nil
+	}
+
+	return os.Remove(dirname)
 }

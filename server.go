@@ -99,11 +99,13 @@ func (s *Server) authClient(srv interface{}, ss grpc.ServerStream, _ *grpc.Strea
 }
 
 func (s *Server) UploadFile(stream pb.Alcatraz_UploadFileServer) error {
+	client, _ := getCommonNameFromCtx(stream.Context())
+
 	meta, err := s.recvMetadata(stream)
 	if err != nil {
 		return grpc.Errorf(codes.InvalidArgument, "failed to recv metadata: %v", err)
 	}
-	log.Debugf("Upload file %q...", meta.GetName())
+	log.Debugf("Client %q started uploading file %q...", client, meta.GetName())
 
 	buffer := make([]byte, 0, meta.GetSize())
 	for {
@@ -118,7 +120,7 @@ func (s *Server) UploadFile(stream pb.Alcatraz_UploadFileServer) error {
 		buffer = append(buffer, chunk...)
 	}
 
-	if err := s.writeFile(meta.GetName(), buffer); err != nil {
+	if err := s.writeFile(client, meta.GetName(), buffer); err != nil {
 		log.Errorf("Failed to write file %q. Error: %v", meta.GetName(), err)
 		return grpc.Errorf(codes.Internal, "failed to create the file: %v", err)
 	}
@@ -158,8 +160,8 @@ func (s *Server) recvChunk(stream pb.Alcatraz_UploadFileServer) ([]byte, error) 
 	return chunk, nil
 }
 
-func (s *Server) writeFile(filename string, buffer []byte) error {
-	fullpath := filepath.Join(s.StoragePath, filename)
+func (s *Server) writeFile(client, filename string, buffer []byte) error {
+	fullpath := filepath.Join(s.StoragePath, client, filename)
 
 	if err := os.MkdirAll(filepath.Dir(fullpath), os.ModePerm); err != nil {
 		return fmt.Errorf("failed create, prior to file, directories: %v", err)

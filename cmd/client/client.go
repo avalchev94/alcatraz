@@ -45,11 +45,16 @@ func main() {
 		LogLevel:        *log,
 	}
 
+	client, err := alcatraz.NewClient(cfg)
+	if err != nil {
+		fmt.Printf("Failed to create Alcatraz client: %v\n", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
-		if err := alcatraz.NewClient(cfg).Run(ctx); err != nil {
+		if err := client.Run(ctx); err != nil {
 			fmt.Printf("Failed to run Alcatraz client: %v\n", err)
 			os.Exit(1)
 		}

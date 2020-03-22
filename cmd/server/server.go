@@ -38,11 +38,17 @@ func main() {
 		LogLevel: *log,
 	}
 
+	server, err := alcatraz.NewServer(cfg)
+	if err != nil {
+		fmt.Printf("Failed to create Alcatraz server: %v\n", err)
+		os.Exit(1)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
-		if err := alcatraz.NewServer(cfg).Run(ctx); err != nil {
+		if err := server.Run(ctx); err != nil {
 			fmt.Printf("Failed to run Alcatraz server: %v\n", err)
 			os.Exit(1)
 		}

@@ -30,38 +30,27 @@ type ServerConfig struct {
 
 type Server struct {
 	ServerConfig
+	creds credentials.TransportCredentials
 }
 
-func NewServer(config ServerConfig) *Server {
-	return &Server{
-		ServerConfig: config,
-	}
-}
-
-func (s *Server) Run(ctx context.Context) error {
-	if _, err := os.Stat(s.StoragePath); os.IsNotExist(err) {
-		if err := os.MkdirAll(s.StoragePath, os.ModePerm); err != nil {
-			return fmt.Errorf("failed to create storage folder %q: %v", s.StoragePath, err)
-		}
-	}
-
+func NewServer(config ServerConfig) (*Server, error) {
 	// set logging level
-	lvl, err := logrus.ParseLevel(s.LogLevel)
+	lvl, err := logrus.ParseLevel(config.LogLevel)
 	if err != nil {
-		return fmt.Errorf("couldn't parse log level: %v", err)
+		return nil, fmt.Errorf("couldn't parse log level: %v", err)
 	}
 	logrus.SetLevel(lvl)
 
 	// Load the client certificate
-	certificate, err := s.Certificates.getCertificate()
+	certificate, err := config.Certificates.getCertificate()
 	if err != nil {
-		return fmt.Errorf("could not get certificate: %v", err)
+		return nil, fmt.Errorf("could not get certificate: %v", err)
 	}
 
 	// Get a certificate pool with the certificate authority
-	certPool, err := s.Certificates.getCertAuthPool()
+	certPool, err := config.Certificates.getCertAuthPool()
 	if err != nil {
-		return fmt.Errorf("could not get cert auth pool: %v", err)
+		return nil, fmt.Errorf("could not get cert auth pool: %v", err)
 	}
 
 	// Create the TLS credentials
@@ -71,12 +60,26 @@ func (s *Server) Run(ctx context.Context) error {
 		ClientCAs:    certPool,
 	})
 
+	// finally, create the storage folder, if not exist
+	if _, err := os.Stat(config.StoragePath); os.IsNotExist(err) {
+		if err := os.MkdirAll(config.StoragePath, os.ModePerm); err != nil {
+			return nil, fmt.Errorf("failed to create storage folder %q: %v", config.StoragePath, err)
+		}
+	}
+
+	return &Server{
+		ServerConfig: config,
+		creds:        creds,
+	}, nil
+}
+
+func (s *Server) Run(ctx context.Context) error {
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", s.Port))
 	if err != nil {
 		return fmt.Errorf("failed to listen to port %d: %v", s.Port, err)
 	}
 
-	server := grpc.NewServer(grpc.Creds(creds), grpc.StreamInterceptor(s.authClient))
+	server := grpc.NewServer(grpc.Creds(s.creds), grpc.StreamInterceptor(s.authClient))
 	pb.RegisterAlcatrazServer(server, s)
 
 	log.Infof("Server listening on port %d...", s.Port)
@@ -127,6 +130,7 @@ func (s *Server) UploadFile(stream pb.Alcatraz_UploadFileServer) error {
 
 		chunk := msg.GetChunk()
 		if chunk == nil {
+			// metadata is always the last message
 			meta = msg.GetMetadata()
 			break
 		}
@@ -141,7 +145,7 @@ func (s *Server) UploadFile(stream pb.Alcatraz_UploadFileServer) error {
 
 	if hex.EncodeToString(hash.Sum(nil)) != meta.GetHash() {
 		log.Errorf("Client [%s]: file upload failed becase hashes are not equal", client)
-		return grpc.Errorf(codes.InvalidArgument, "hashes are not equal")
+		return grpc.Errorf(codes.DataLoss, "hashes are not equal")
 	}
 
 	if err := s.writeFile(client, meta.GetName(), buffer); err != nil {

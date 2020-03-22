@@ -15,3 +15,6 @@ build-server:
 
 clean:
 	rm -rf $(BIN_DIR)
+
+test:
+	go test ./...  --cover -p 1

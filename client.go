@@ -135,9 +135,8 @@ func (c *Client) monitor(ctx context.Context, upload chan<- string, uploaded, fa
 					return nil
 				}
 
-				filepath = strings.TrimPrefix(filepath, c.MonitorFolder)
-
 				if _, ok := uploadingFiles[filepath]; !ok {
+					// if upload channel is full, we don't want to block monitor goroutine
 					go func() { upload <- filepath }()
 					uploadingFiles[filepath] = struct{}{}
 				}
@@ -171,7 +170,7 @@ func (c *Client) upload(ctx context.Context, upload <-chan string, uploaded, fai
 }
 
 func (c *Client) uploadFile(ctx context.Context, filename string) error {
-	file, err := os.Open(filepath.Join(c.MonitorFolder, filename))
+	file, err := os.Open(filename)
 	if err != nil {
 		return fmt.Errorf("failed to open the file: %v", err)
 	}
@@ -251,8 +250,7 @@ func (c *Client) streamFile(file *os.File, stream pb.Alcatraz_UploadFileClient) 
 }
 
 func (c *Client) removeFile(filename string) error {
-	fullpath := filepath.Join(c.MonitorFolder, filename)
-	if err := os.Remove(fullpath); err != nil {
+	if err := os.Remove(filename); err != nil {
 		return err
 	}
 

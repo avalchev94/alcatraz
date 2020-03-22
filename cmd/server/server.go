@@ -9,7 +9,20 @@ import (
 )
 
 func main() {
-	server := alcatraz.NewServer(8080, "storage")
+	cfg := alcatraz.ServerConfig{
+		Port:        8080,
+		StoragePath: "storage/",
+		Certificates: alcatraz.CertFiles{
+			Certificate: "../../certs/localhost.crt",
+			Key:         "../../certs/localhost.key",
+			CertAuth:    "../../certs/CertAuth.crt",
+		},
+		AllowedClients: map[string]bool{
+			"Alice": true,
+		},
+	}
+
+	server := alcatraz.NewServer(cfg)
 	if err := server.Run(context.Background()); err != nil {
 		fmt.Printf("Failed to run Alcatraz server: %v\n", err)
 		os.Exit(1)

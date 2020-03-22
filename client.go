@@ -2,6 +2,7 @@ package alcatraz
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"os"
@@ -12,42 +13,65 @@ import (
 	"github.com/avalchev94/alcatraz/pb"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
-type Client struct {
-	host   string
-	folder string
-	cli    pb.AlcatrazClient
+type ClientConfig struct {
+	Host          string
+	MonitorFolder string
+	Certificates  CertFiles
 }
 
-func NewClient(host string, folder string) *Client {
+type Client struct {
+	ClientConfig
+	cli pb.AlcatrazClient
+}
+
+func NewClient(config ClientConfig) *Client {
 	return &Client{
-		host:   host,
-		folder: folder,
-		cli:    nil,
+		ClientConfig: config,
+		cli:          nil,
 	}
 }
 
 func (c *Client) Run(ctx context.Context) error {
 	// check if folder exists
-	if _, err := os.Stat(c.folder); os.IsNotExist(err) {
-		return fmt.Errorf("folder %q does not exist", c.folder)
+	if _, err := os.Stat(c.MonitorFolder); os.IsNotExist(err) {
+		return fmt.Errorf("folder %q does not exist", c.MonitorFolder)
 	}
 
+	// Load the client certificate
+	certificate, err := c.Certificates.getCertificate()
+	if err != nil {
+		return fmt.Errorf("could not get certificate: %v", err)
+	}
+
+	// Get a certificate pool with the certificate authority
+	certPool, err := c.Certificates.getCertAuthPool()
+	if err != nil {
+		return fmt.Errorf("could not get cert auth pool: %v", err)
+	}
+
+	// Create the TLS credentials
+	creds := credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{certificate},
+		RootCAs:      certPool,
+	})
+
 	// we will work only with files inside the folder, so change working dir
-	if err := os.Chdir(c.folder); err != nil {
+	if err := os.Chdir(c.MonitorFolder); err != nil {
 		return fmt.Errorf("failed to change working directory: %v", err)
 	}
 
 	// open connection to the server
-	conn, err := grpc.Dial(c.host, grpc.WithInsecure(), grpc.WithBlock())
+	conn, err := grpc.Dial(c.Host, grpc.WithTransportCredentials(creds))
 	if err != nil {
-		return fmt.Errorf("failed to dial server on host %q: %v", c.host, err)
+		return fmt.Errorf("failed to dial server on host %q: %v", c.Host, err)
 	}
 	defer conn.Close()
 
 	c.cli = pb.NewAlcatrazClient(conn)
-	log.Infof("Opened connection with %s", c.host)
+	log.Infof("Opened connection with %s", c.Host)
 
 	upload := make(chan string, 50)
 	uploaded := make(chan string, 50)

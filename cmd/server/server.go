@@ -18,7 +18,9 @@ func main() {
 			CertAuth:    "../../certs/CertAuth.crt",
 		},
 		AllowedClients: map[string]bool{
-			"Alice": true,
+			"Malcolm": true,
+			"Dewey":   true,
+			"Reese":   true,
 		},
 	}
 

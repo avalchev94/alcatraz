@@ -13,8 +13,8 @@ func main() {
 		Host:          "localhost:8080",
 		MonitorFolder: "upload/",
 		Certificates: alcatraz.CertFiles{
-			Certificate: "../../certs/Alice.crt",
-			Key:         "../../certs/Alice.key",
+			Certificate: "../../certs/Reese.crt",
+			Key:         "../../certs/Reese.key",
 			CertAuth:    "../../certs/CertAuth.crt",
 		},
 	}

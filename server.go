@@ -2,9 +2,10 @@ package alcatraz
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"net"
 	"os"
@@ -100,64 +101,47 @@ func (s *Server) authClient(srv interface{}, ss grpc.ServerStream, _ *grpc.Strea
 
 func (s *Server) UploadFile(stream pb.Alcatraz_UploadFileServer) error {
 	client, _ := getCommonNameFromCtx(stream.Context())
+	log.Debugf("Client [%s]: started file upload..", client)
 
-	meta, err := s.recvMetadata(stream)
-	if err != nil {
-		return grpc.Errorf(codes.InvalidArgument, "failed to recv metadata: %v", err)
-	}
-	log.Debugf("Client %q started uploading file %q...", client, meta.GetName())
+	var (
+		meta   *pb.Metadata
+		buffer = []byte{}
+		hash   = sha256.New()
+	)
 
-	buffer := make([]byte, 0, meta.GetSize())
 	for {
-		chunk, err := s.recvChunk(stream)
+		msg, err := stream.Recv()
 		if err != nil {
-			log.Errorf("Failed to read chunk for file %q. Error: %v", meta.GetName(), err)
-			return grpc.Errorf(codes.InvalidArgument, "failed to recv chunck: %v", err)
-		} else if chunk == nil {
+			log.Errorf("Client [%s]: file upload failed on Recv with error: %v", client, err)
+			return grpc.Errorf(codes.InvalidArgument, "failed to recieve msg from stream: %v", err)
+		}
+
+		chunk := msg.GetChunk()
+		if chunk == nil {
+			meta = msg.GetMetadata()
 			break
+		}
+
+		if _, err := hash.Write(chunk); err != nil {
+			log.Errorf("Client [%s]: file upload failed on hash write with error: %v", client, err)
+			return grpc.Errorf(codes.Internal, "failed to write to hash: %v", err)
 		}
 
 		buffer = append(buffer, chunk...)
 	}
 
+	if hex.EncodeToString(hash.Sum(nil)) != meta.GetHash() {
+		log.Errorf("Client [%s]: file upload failed becase hashes are not equal", client)
+		return grpc.Errorf(codes.InvalidArgument, "hashes are not equal")
+	}
+
 	if err := s.writeFile(client, meta.GetName(), buffer); err != nil {
-		log.Errorf("Failed to write file %q. Error: %v", meta.GetName(), err)
+		log.Errorf("Client [%s]: file upload failed on write file with error: %v", client, err)
 		return grpc.Errorf(codes.Internal, "failed to create the file: %v", err)
 	}
-	log.Debugf("Successfully uploaded %q", meta.GetName())
+	log.Debugf("Client [%s]: file with name %q and size %d was uploaded", client, meta.GetName(), meta.GetSize())
 
 	return stream.SendAndClose(&empty.Empty{})
-}
-
-func (s *Server) recvMetadata(stream pb.Alcatraz_UploadFileServer) (*pb.Metadata, error) {
-	msg, err := stream.Recv()
-	if err != nil {
-		return nil, fmt.Errorf("failed to recieve message from stream: %v", err)
-	}
-
-	meta := msg.GetMetadata()
-	if meta == nil {
-		return nil, fmt.Errorf("message type is not file metada")
-	}
-
-	return meta, nil
-}
-
-func (s *Server) recvChunk(stream pb.Alcatraz_UploadFileServer) ([]byte, error) {
-	msg, err := stream.Recv()
-	if err != nil {
-		if err == io.EOF {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to recieve message from stream: %v", err)
-	}
-
-	chunk := msg.GetChunk()
-	if chunk == nil {
-		return nil, fmt.Errorf("message type is not file chunk")
-	}
-
-	return chunk, nil
 }
 
 func (s *Server) writeFile(client, filename string, buffer []byte) error {

@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/avalchev94/alcatraz"
+	"github.com/sirupsen/logrus"
 )
 
 func main() {
@@ -23,6 +24,8 @@ func main() {
 			"Reese":   true,
 		},
 	}
+
+	logrus.SetLevel(logrus.DebugLevel)
 
 	server := alcatraz.NewServer(cfg)
 	if err := server.Run(context.Background()); err != nil {

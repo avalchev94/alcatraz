@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,11 +59,6 @@ func (c *Client) Run(ctx context.Context) error {
 		RootCAs:      certPool,
 	})
 
-	// we will work only with files inside the folder, so change working dir
-	if err := os.Chdir(c.MonitorFolder); err != nil {
-		return fmt.Errorf("failed to change working directory: %v", err)
-	}
-
 	// open connection to the server
 	conn, err := grpc.Dial(c.Host, grpc.WithTransportCredentials(creds))
 	if err != nil {
@@ -73,10 +69,12 @@ func (c *Client) Run(ctx context.Context) error {
 	c.cli = pb.NewAlcatrazClient(conn)
 	log.Infof("Opened connection with %s", c.Host)
 
+	// create channels for the monitoring and uploading goroutines
 	upload := make(chan string, 50)
 	uploaded := make(chan string, 50)
 	failed := make(chan string, 50)
 
+	// run monitor and upload goroutines
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 	go func() {
@@ -111,10 +109,12 @@ func (c *Client) monitor(ctx context.Context, upload chan<- string, uploaded, fa
 		case file := <-failed:
 			delete(uploadingFiles, file)
 		case <-timer.C:
-			err := filepath.Walk(".", func(filepath string, fileinfo os.FileInfo, err error) error {
+			err := filepath.Walk(c.MonitorFolder, func(filepath string, fileinfo os.FileInfo, err error) error {
 				if fileinfo.IsDir() {
 					return nil
 				}
+
+				filepath = strings.TrimPrefix(filepath, c.MonitorFolder)
 
 				if _, ok := uploadingFiles[filepath]; !ok {
 					upload <- filepath
@@ -155,7 +155,7 @@ func (c *Client) upload(ctx context.Context, upload <-chan string, uploaded, fai
 }
 
 func (c *Client) uploadFile(ctx context.Context, filename string) error {
-	file, err := os.Open(filename)
+	file, err := os.Open(filepath.Join(c.MonitorFolder, filename))
 	if err != nil {
 		return fmt.Errorf("failed to open the file: %v", err)
 	}
@@ -215,14 +215,9 @@ func (c *Client) uploadFile(ctx context.Context, filename string) error {
 }
 
 func (c *Client) removeFile(filename string) error {
-	if err := os.Remove(filename); err != nil {
+	fullpath := filepath.Join(c.MonitorFolder, filename)
+	if err := os.Remove(fullpath); err != nil {
 		return err
-	}
-
-	if dir := filepath.Dir(filename); dir != "" {
-		if err := os.Remove(dir); err == nil {
-			err = nil
-		}
 	}
 
 	return nil

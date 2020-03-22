@@ -13,6 +13,7 @@ import (
 
 	"github.com/avalchev94/alcatraz/pb"
 	"github.com/golang/protobuf/ptypes/empty"
+	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -24,6 +25,7 @@ type ServerConfig struct {
 	StoragePath    string
 	Certificates   CertFiles
 	AllowedClients map[string]bool
+	LogLevel       string
 }
 
 type Server struct {
@@ -42,6 +44,13 @@ func (s *Server) Run(ctx context.Context) error {
 			return fmt.Errorf("failed to create storage folder %q: %v", s.StoragePath, err)
 		}
 	}
+
+	// set logging level
+	lvl, err := logrus.ParseLevel(s.LogLevel)
+	if err != nil {
+		return fmt.Errorf("couldn't parse log level: %v", err)
+	}
+	logrus.SetLevel(lvl)
 
 	// Load the client certificate
 	certificate, err := s.Certificates.getCertificate()

@@ -2,33 +2,64 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"sync"
 	"time"
 
 	"github.com/avalchev94/alcatraz"
-	"github.com/sirupsen/logrus"
 )
 
 func main() {
-	cfg := alcatraz.ClientConfig{
-		Host:            "localhost:8080",
-		MonitorFolder:   "upload/",
-		MonitorInterval: 5 * time.Second,
-		Certificates: alcatraz.CertFiles{
-			Certificate: "../../certs/Reese.crt",
-			Key:         "../../certs/Reese.key",
-			CertAuth:    "../../certs/CertAuth.crt",
-		},
-		ParallelUploads: 30,
-		ChunkSize:       128,
-	}
+	var (
+		host     = flag.String("host", "localhost:8080", "the address of the Alcatraz server")
+		cert     = flag.String("crt", "", "path to the client certificate")
+		key      = flag.String("key", "", "path to client private key")
+		ca       = flag.String("ca", "", "path to the Certificate Authority certificate")
+		parallel = flag.Int("parallel", 30, "maximum number of parallely processed files")
+		interval = flag.Duration("interval", 5*time.Second, "folder monitoring interval")
+		chunk    = flag.Int("chunk", 128, "size(in bytes) of the chunk unit(files are divided to chunks when uploaded)")
+		log      = flag.String("log", "info", "log level: info or debug")
+	)
 
-	logrus.SetLevel(logrus.DebugLevel)
-
-	client := alcatraz.NewClient(cfg)
-	if err := client.Run(context.Background()); err != nil {
-		fmt.Printf("Failed to run Alcatraz client: %v\n", err)
+	if len(os.Args) < 2 {
+		fmt.Printf("Usage:\n\talcatraz path_to_folder\n")
 		os.Exit(1)
 	}
+
+	flag.CommandLine.Parse(os.Args[2:])
+
+	cfg := alcatraz.ClientConfig{
+		Host:            *host,
+		MonitorFolder:   os.Args[1],
+		MonitorInterval: *interval,
+		Certificates: alcatraz.CertFiles{
+			Certificate: *cert,
+			Key:         *key,
+			CertAuth:    *ca,
+		},
+		ParallelUploads: *parallel,
+		ChunkSize:       *chunk,
+		LogLevel:        *log,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		if err := alcatraz.NewClient(cfg).Run(ctx); err != nil {
+			fmt.Printf("Failed to run Alcatraz client: %v\n", err)
+			os.Exit(1)
+		}
+		wg.Done()
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt)
+
+	<-quit
+	cancel()
+	wg.Wait()
 }

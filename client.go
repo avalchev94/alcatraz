@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/avalchev94/alcatraz/pb"
+	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -26,6 +27,7 @@ type ClientConfig struct {
 	Certificates    CertFiles
 	ParallelUploads int
 	ChunkSize       int
+	LogLevel        string
 }
 
 type Client struct {
@@ -45,6 +47,13 @@ func (c *Client) Run(ctx context.Context) error {
 	if _, err := os.Stat(c.MonitorFolder); os.IsNotExist(err) {
 		return fmt.Errorf("folder %q does not exist", c.MonitorFolder)
 	}
+
+	// set logging level
+	lvl, err := logrus.ParseLevel(c.LogLevel)
+	if err != nil {
+		return fmt.Errorf("couldn't parse log level: %v", err)
+	}
+	logrus.SetLevel(lvl)
 
 	// Load the client certificate
 	certificate, err := c.Certificates.getCertificate()
@@ -98,7 +107,9 @@ func (c *Client) Run(ctx context.Context) error {
 
 	// if context is canceled, wait goroutines to exit and return
 	<-ctx.Done()
+	log.Info("Gracefully stoping client...")
 	wg.Wait()
+	log.Info("Client stopped")
 
 	return nil
 }
@@ -226,7 +237,7 @@ func (c *Client) streamFile(file *os.File, stream pb.Alcatraz_UploadFileClient) 
 	err := stream.Send(&pb.UploadRequest{
 		TestOneof: &pb.UploadRequest_Metadata{
 			Metadata: &pb.Metadata{
-				Name: file.Name(),
+				Name: strings.TrimPrefix(file.Name(), c.MonitorFolder),
 				Size: size,
 				Hash: hex.EncodeToString(hash.Sum(nil)),
 			},
